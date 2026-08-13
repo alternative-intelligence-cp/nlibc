@@ -1,0 +1,12 @@
+[project]
+name = "nlibc"
+version = "0.1.0"
+description = "Nitpick-native C standard library replacement — zero C dependencies"
+authors = ["Randy"]
+target = "library"
+
+# No dependencies, by design and by requirement. nlibc sits at the bottom of the
+# ecosystem: it reaches the kernel through its own syscall layer and supplies the
+# runtime symbols LLVM emits (memcpy, memset, __divti3, __udivti3, __modti3).
+# Nothing may be added here without violating the zero-dependency constraint.
+[dependencies]

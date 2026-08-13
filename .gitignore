@@ -1,1 +1,22 @@
-.internal
+# Working scratch area — never committed
+.internal/
+
+# Build output
+build/
+*.o
+*.a
+*.bc
+*.ll
+*.s
+*.out
+a.out
+
+# Compiler / tooling artifacts
+*.log
+ast_dump.txt
+debug_dump.ll
+
+# Editor / OS
+*.swp
+*~
+.DS_Store
