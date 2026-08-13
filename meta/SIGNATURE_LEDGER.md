@@ -17,8 +17,8 @@ Classification of every public function in `ARCHIVE/libn/src` against **D-012**
 | **STATUS** | 102 | `NIL` |
 | **PREDICATE** | 5 | `bool` |
 | **HANDLE** | 4 | `FILE->` |
-| **FD** | 19 | `int32` — file descriptor |
-| **PID** | 26 | `int32` — pid / uid / gid |
+| **FD** | 19 | **`fd`** — distinct type (D-042) |
+| **PID** | 26 | **`pid`** / **`tid`** / **`uid`** / **`gid`** (D-042) |
 | **COUNT** | 227 | `int64` — count, with failure moving to `Result.error` |
 | **NUMERIC** | 65 | `int64` — unchanged |
 | **KEEP** | 94 | unchanged |
@@ -977,16 +977,20 @@ edits are applied mechanically:
   rewritten in a way that introduces early return, which would destroy the
   timing property. Flag for manual handling.
 
-### Two categories worth a type rather than an integer
+### FD and PID become distinct types — **approved, D-042**
 
-`FD` (19) and `PID` (26) are both classified as `int32` above, but by D-005's
-principle — a semantic concept is not its representation — both are candidates
-for distinct types. A file descriptor supports `close` and `read`; it does not
-support multiplication. The same argument that separated `char8` from `uint8`
-applies.
+The 45 signatures in these two categories target **`fd`, `pid`, `tid`, `uid`, and
+`gid`** rather than bare integers. Comparison is permitted; arithmetic is not.
 
-Deferred rather than decided: it is a language-surface question, not a porting
-one, and 45 signatures is a small enough surface to revisit later.
+The payoff is larger than the pedantry suggests. Combined with the universal
+`Result<T>` rule, **an `fd` value is always valid** — POSIX's `-1` goes to
+`Result.error` and is not representable as an `fd` at all, so the "did I remember
+to check for `-1`?" bug class does not exist. Likewise `fork` returning `-1`
+becomes an errored `Result`, while the `0`-means-child convention stays a
+legitimate `pid` a `pick` can match.
+
+It also removes a class of argument-order mistakes: `dup2(oldfd, newfd)` can no
+longer be called with a size in either position.
 
 ### Not covered here
 
