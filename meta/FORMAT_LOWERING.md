@@ -155,19 +155,105 @@ engine:
 
 ---
 
-## 5. What this sets up for steps 4–6
+## 5. Step 4 — the unbuffered io family: 45 → 3
 
-Steps 4 and 5 (`io_*printf`, then `printf`/`fprintf`/`eprintf`/`asprintf`) are
-the same transformation over a different output sink — the emitters write to an
-fd or a `FILE` buffer instead of a `char8` buffer, and the lowering is identical.
+`io/printf.npk` holds five families of nine: `io_fprintf`, `io_printf`,
+`io_eprintf`, `io_dprintf`, `io_sprintf`. The plan was 45 → 5. **Two of the five
+are pure aliases**, so it is 45 → 3.
 
-**Step 6, `scanf`, is where this matters most.** `printf` with a mismatched
-specifier reads through a bad pointer; `scanf` *writes* through one. The
-compile-time check there must verify not only that each argument is a pointer of
-the type the specifier writes, but that it is writable. Under lowering, a
-`scanf` specifier emits a typed reader taking a typed pointer, so `%d` paired
-with a `string` is a compile error rather than a four-byte write into a string's
-header.
+| Family | Outcome | Why |
+|---|---|---|
+| `io_fprintf0…8` | → 1 | the real implementation |
+| `io_printf0…8` | → 1 | `io_fprintf(STDOUT_FD, …)` — a genuine convenience |
+| `io_eprintf0…8` | → 1 | `io_fprintf(STDERR_FD, …)` — likewise |
+| `io_dprintf0…8` | **→ 0** | every one is `return io_fprintf(fd, …)` |
+| `io_sprintf0…8` | **→ 0** | every one is `return str_snprintf(buf, size, …)` |
 
-That is the step to do last and to spend the most care on, exactly as
-`VARIADIC_COLLAPSE.md` orders it.
+`io_dprintf` exists in C because `dprintf` writes to a descriptor and `fprintf`
+writes to a `FILE*`. Here **both take `int64:fd`** — the distinction that
+justifies two names does not exist in this module, since the buffered `FILE*`
+version lives in `io/bio/fprintf.npk` and is step 5. Nine functions, one
+behaviour.
+
+`io_sprintf`'s header admits the same thing outright:
+
+> These are provided for completeness / naming consistency. For most uses, call
+> `str_snprintfN` directly.
+
+Neither family has a single caller anywhere in `libn` — nor does the rest of the
+file — so deleting them costs nothing.
+
+`io_perror` is not variadic and stays.
+
+### The double format
+
+Every `io_fprintf` formats its output **twice**:
+
+```nitpick
+str_snprintf0(0i64, 0i64, fmt);              // pass 1 — measure, writes nothing
+...
+str_snprintf0(buf_ptr, len + 1i64, fmt);     // pass 2 — render
+```
+
+then writes, and on the long path allocates and frees around it:
+
+```nitpick
+if (len < PRINTF_BUF_SIZE) { stack uint8[4096]:buf; … }
+else { libn_slab_alloc(len + 1i64); … io_write_n(…); mem_free(p); }
+```
+
+So a single print costs two full renders, a 4096-byte stack frame, and — past
+4096 bytes of output — a heap allocation and free. **`printf` currently has an
+`ENOMEM` failure path.**
+
+One thing to record as correct rather than suspect: `PRINTF_BUF_SIZE` is 4096 and
+the buffer is `uint8[4096]`, with the guard `len < PRINTF_BUF_SIZE`, so the
+largest `len` is 4095 and the `len + 1` write exactly fits. It is right. It is
+also two constants coupled by hand, written separately, repeated across nine
+functions — correct today and a one-byte overflow the first time someone edits
+one of them. Under lowering the pairing disappears rather than needing a comment.
+
+### What lowering removes here
+
+D-052 removes the runtime parser. In this family it removes the **buffering
+strategy** as well, which is the larger win:
+
+- **No measure pass.** Every emitter's output length is either a compile-time
+  constant (literals; the digit bound for a numeric specifier) or a value already
+  in hand (`string`/`cstring` carry `len`, per D-049). The total is a **sum**,
+  computed before emitting — not a second render.
+- **No heap.** With the bound known up front, output goes into one stack buffer
+  sized from that bound; output larger than the buffer flushes in chunks. So
+  **`printf` never allocates, and its `ENOMEM` path ceases to exist.** For a
+  library where the failure path of a diagnostic print matters, removing a
+  failure mode from the thing you call *to report failures* is worth more than
+  the cycles.
+- **No hand-coupled constants**, and no 4096-byte frame on call sites whose
+  output is provably short.
+
+The one thing lowering must not do is emit a `write` per emitter — that would
+turn `printf("x=%d\n", n)` into three syscalls and break output atomicity
+between concurrent writers. Accumulate into the sized buffer, then one write.
+Buffered streams (step 5) accumulate into the `FILE` buffer instead, which is the
+same shape with a different destination.
+
+### Ledger
+
+45 → 3 rather than 45 → 5, so two below plan: **464 → 462**.
+
+---
+
+## 6. What remains
+
+**Step 5** — `printf` / `fprintf` / `eprintf` / `asprintf` over the buffered
+`FILE` layer. Same transformation, emitters targeting the `FILE` buffer. Check
+`io_dprintf`'s lesson there too: `fprintf(FILE->, …)` and `io_fprintf(fd, …)` are
+genuinely different sinks, but confirm the buffered family has no aliases of its
+own before collapsing.
+
+**Step 6 — `scanf`, last and most carefully.** A mismatched `printf` specifier
+reads through a bad pointer; a mismatched `scanf` specifier **writes** through
+one. The compile-time check must verify that each argument is a pointer of the
+type the specifier writes, and that it is writable. Under lowering, each
+specifier emits a typed reader taking a typed pointer, so `%d` paired with a
+`string` is a compile error rather than a four-byte write into a string's header.

@@ -11,7 +11,7 @@ about to be deleted.
 
 | | Before | After |
 |---|---:|---:|
-| public functions | 608 | **464** |
+| public functions | 608 | **462** |
 | parameters | 1,710 | **~825** |
 
 Where the 143 goes:
@@ -165,7 +165,11 @@ inhabited only by literals. Code needing dynamic output composes it with
    `fmt`-checked wrappers. That document settles the implementation for steps
    4–6 too: the compiler **lowers** the format string to straight-line typed
    emitters rather than merely checking it, so no runtime format parser exists.
-4. **`io_*printf`** — the unbuffered io family.
+4. **`io_*printf`** — the unbuffered io family; **45 → 3**, not 45 → 5, per
+   `FORMAT_LOWERING.md` §5. `io_dprintf*` is a pure alias of `io_fprintf*` (both
+   take an fd) and `io_sprintf*` a pure alias of `str_snprintf*`; both families
+   are deleted. Lowering also removes the double-format pass and the heap
+   fallback, so `printf` stops having an `ENOMEM` path.
 5. **`printf` / `fprintf` / `eprintf` / `asprintf`** — the buffered layer.
 6. **`scanf` / `fscanf` / `sscanf`** — last, and the most careful: the pointer
    checking in step 4 of the previous section is where the safety is won.
