@@ -43,11 +43,17 @@ pub func:execl  = NIL(wild int8->:path, ..*wild int8->[]:args);
 // proc/exec.npk        execlp1 … execlp8 (8)  ->  1
 pub func:execlp = NIL(wild int8->:name, ..*wild int8->[]:args);
 
-// syscall/syscall.npk  sys1 … sys5       (5)  ->  1
-pub func:sys      = int64(int64:nr, ..*int64[]:args);
-
-// syscall/syscall.npk  sys_full1 … sys_full5 (5) -> 1
-pub func:sys_full = int64(int64:nr, ..*int64[]:args);
+// syscall/syscall.npk  sys1 … sys5, sys_full1 … sys_full5  (10)  ->  ZERO
+//
+// These do NOT collapse — they are DELETED (D-047). libn's wrappers are built on
+// sys!!!, the raw tier D-001 removed, and the language builtins `sys` and
+// `sys_full` now return Result<int64> directly. err_from_syscall goes with them.
+// Callers use the builtins.
+//
+// Before deleting: libn's `sys_safe` holds the curated whitelist that
+// BUILTIN_REFERENCE §3 leaves unspecified, including per-argument filtering
+// (SYS_IOCTL is admitted only for three specific request codes). That policy is
+// extracted into the builtin's specification first.
 ```
 
 Notes:
@@ -119,8 +125,9 @@ inhabited only by literals. Code needing dynamic output composes it with
 
 ## Order of work
 
-1. **`sys` / `sys_full`** — the syscall layer everything else sits on, and the
-   simplest collapse. 10 functions to 2.
+1. **`sys` / `sys_full`** — **deleted, not collapsed** (D-047). Extract the
+   `sys_safe` whitelist policy into the builtin's specification first, then remove
+   all 10 wrappers plus `err_from_syscall` and rewrite call sites to the builtins.
 2. **`execl` / `execlp`** — 17 to 2, no dependants inside `libn`.
 3. **`str_snprintf`, `strbuf_appendf`** — the string layer, needed by the io
    families.
