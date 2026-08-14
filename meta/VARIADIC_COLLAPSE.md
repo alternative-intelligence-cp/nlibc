@@ -50,7 +50,7 @@ hazard across intact.
 
 ## Homogeneous — 27 → 0
 
-Signatures below are shown **after** the D-012 and D-042 passes, so the intended
+Signatures below are shown **after** the D-012, D-042, and D-049 passes, so the intended
 end state is visible in one place. The collapse itself only changes the arity.
 
 ```nitpick

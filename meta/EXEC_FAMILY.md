@@ -4,8 +4,8 @@ Step 2 of `VARIADIC_COLLAPSE.md`. The plan was to collapse `execl0`…`execl8` a
 `execlp1`…`execlp8` — 17 functions — into two variadic functions.
 
 **They should be deleted instead, not collapsed. 17 → 0.** The reasoning, a
-safety defect found along the way, and one language question the collapse forces
-into the open.
+safety defect found along the way, and the string-type question the collapse
+forced into the open — since settled as D-049.
 
 ---
 
@@ -83,10 +83,10 @@ site, enforced by an `if` one layer down.
 Make `argv[0]` a **separate mandatory parameter** instead:
 
 ```nitpick
-pub func:execv   = NIL(char8[]:path, char8[]:argv0, char8[][]:args);
-pub func:execvp  = NIL(char8[]:name, char8[]:argv0, char8[][]:args);
-pub func:execve  = NIL(char8[]:path, char8[]:argv0, char8[][]:args, char8[][]:envp);
-pub func:execvpe = NIL(char8[]:name, char8[]:argv0, char8[][]:args, char8[][]:envp);
+pub func:execv   = NIL(cstring:path, cstring:argv0, cstring[]:args);
+pub func:execvp  = NIL(cstring:name, cstring:argv0, cstring[]:args);
+pub func:execve  = NIL(cstring:path, cstring:argv0, cstring[]:args, cstring[]:envp);
+pub func:execvpe = NIL(cstring:name, cstring:argv0, cstring[]:args, cstring[]:envp);
 ```
 
 `argc == 0` is now **unrepresentable** — there is no argument list to leave
@@ -110,45 +110,33 @@ value that is `-1` or nothing.
 
 ---
 
-## 3. The question this forces: `char8[]` does not guarantee termination
+## 3. Settled: these take `cstring` (D-049)
 
-`execve` hands the kernel a pointer it will read until it finds a NUL. So the
-type of `path`, `argv0`, and every element of `args` has to be something
-NUL-terminated.
+`execve` hands the kernel a pointer it reads until NUL, and a Nitpick `string` is
+`{ptr, len, cap}` and **not** NUL-terminated, so `string` cannot be the parameter
+type. The `char8[]` that `as_cstring` produced could not be it either: `char8[]`
+is an ordinary array, so one built by hand need not end in `0u8` and nothing in
+the type system would flag it.
 
-It cannot be `string`. Per `TYPE_REFERENCE.md` §3.1 a Nitpick `string` is
-`{ptr, len, cap}` — 24 bytes, length-carrying, **not NUL-terminated**. Passing
-one to `execve` reads off the end of the buffer.
+**D-049 settles this with a `cstring` type** — `{ptr, len}`, buffer `len + 1`
+bytes with `buf[len] == 0u8`, constructible only from a string literal (checked
+at compile time) or `to_cstring(string)` (fallible at runtime). That is the type
+§2's signatures use.
 
-The spec's answer is `as_cstring(string) → char8[]`, which produces a
-NUL-terminated `char8[]`. So `char8[]` is the type used above. But **`char8[]`
-does not carry that guarantee** — it is an ordinary char array, and one built by
-hand need not end in `0u8`. The guarantee lives in `as_cstring`'s behaviour, not
-in the type, so nothing stops a caller passing an unterminated array and nothing
-in the type system flags it.
+Two properties this buys `exec` specifically:
 
-This is not an exec-specific problem. Every kernel-bound string in nlibc has it:
-`open`, `stat`, `getenv`, `chdir`, `mkdir`, `readlink`, `unlink`. It is also
-exactly the unbounded-read pattern static analysers cannot discharge, so it will
-surface during the Astrée run whether or not it is settled first.
+- **`to_cstring` rejects an interior NUL**, so the poison-NUL split between a
+  validator's view of a path and the kernel's view cannot occur. A caller that
+  checks `path` and then execs it is checking the string that gets executed.
+- **The length is retained**, so `execve` never scans for a terminator. Combined
+  with §2's slice-valued `args`, every read in the call is bounded — no `strlen`
+  over `path`, no NULL-scan over `argv`.
 
-**Recommendation: add a `cstring` type whose only constructor is `as_cstring`.**
-Same representation as `char8[]`, distinct name, guarantee by construction:
-
-```nitpick
-pub func:execv = NIL(cstring:path, cstring:argv0, cstring[]:args);
-```
-
-This is the `fd` and `pid` argument from D-042 applied to strings. An `fd` is
-always valid because `-1` is not representable; a `cstring` is always terminated
-because there is no way to make an unterminated one. The alternative — a runtime
-check of `arr[len-1] == 0u8` in every wrapper — is a check at every boundary
-instead of a proof at one, and is what D-042 already rejected once.
-
-**This needs a decision before the signatures are final**, since it changes the
-type of roughly every path and name parameter in the library. It is recorded
-here rather than assumed; the signatures above use `char8[]` and become `cstring`
-if the recommendation is taken.
+The same change applies library-wide: `open`, `stat`, `getenv`, `chdir`,
+`mkdir`, `readlink`, and `unlink` all take `cstring`. Path *syntax* — separators,
+`..` normalization, absolute-vs-relative — is not `cstring`'s job; that is the
+`Path` type in the stdlib above `nlibc` (D-051), which reaches a syscall by
+`to_cstring`.
 
 ---
 
