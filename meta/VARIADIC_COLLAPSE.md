@@ -170,7 +170,13 @@ inhabited only by literals. Code needing dynamic output composes it with
    take an fd) and `io_sprintf*` a pure alias of `str_snprintf*`; both families
    are deleted. Lowering also removes the double-format pass and the heap
    fallback, so `printf` stops having an `ENOMEM` path.
-5. **`printf` / `fprintf` / `eprintf` / `asprintf`** — the buffered layer.
+5. **`printf` / `fprintf` / `eprintf` / `asprintf`** — the buffered layer; 36 → 4
+   as planned, per `FORMAT_LOWERING.md` §6. Not an alias of the unbuffered family
+   — `fprintf` ends in `bio_fprint_rendered` where `io_fprintf` ends in
+   `io_write_n`, and the flush/atomicity difference is real. `asprintf` becomes
+   **`format(fmt:f, ..*) -> string`**: its header documents a truncating
+   implementation that does not exist, and its raw-pointer-plus-out-param
+   contract is what `string` supersedes.
 6. **`scanf` / `fscanf` / `sscanf`** — last, and the most careful: the pointer
    checking in step 4 of the previous section is where the safety is won.
 

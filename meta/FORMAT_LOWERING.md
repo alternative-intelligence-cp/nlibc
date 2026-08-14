@@ -243,13 +243,88 @@ same shape with a different destination.
 
 ---
 
-## 6. What remains
+## 6. Step 5 — the buffered `FILE` family: 36 → 4
 
-**Step 5** — `printf` / `fprintf` / `eprintf` / `asprintf` over the buffered
-`FILE` layer. Same transformation, emitters targeting the `FILE` buffer. Check
-`io_dprintf`'s lesson there too: `fprintf(FILE->, …)` and `io_fprintf(fd, …)` are
-genuinely different sinks, but confirm the buffered family has no aliases of its
-own before collapsing.
+`io/bio/fprintf.npk` holds four families of nine: `fprintf`, `printf`, `eprintf`,
+`asprintf`. Given step 4's hit rate the first thing to check was whether this
+family is an alias of the unbuffered one. **It is not.**
+
+`fprintf0` ends in `bio_fprint_rendered(fp, buf_ptr, len)` — the buffered path —
+where `io_fprintf0` ends in `io_write_n(fd, buf_ptr, len)`. Different sinks, and
+the difference is semantic: flush timing, write atomicity, and ordering between
+the two are genuinely observable. `printf` (buffered, `stdout_fp`) and
+`io_printf` (unbuffered, `STDOUT_FD`) coexisting is legitimate, not the
+`io_dprintf` situation.
+
+So the plan holds: **36 → 4**, and the ledger is unchanged at 462.
+
+`printf`/`eprintf` are `fprintf(stdout_fp, …)` / `fprintf(stderr_fp, …)`, the
+same genuine convenience as their unbuffered counterparts. The double-format,
+4096-byte stack buffer, and slab-alloc fallback are identical to step 4 and get
+the identical treatment.
+
+One redundancy worth removing while here: `printf0` calls `bio_ensure_std_init()`
+and then calls `fprintf0`, which calls `bio_ensure_std_init()` again. It is
+idempotent so the behaviour is correct, but every buffered print through the
+convenience wrappers initialises twice.
+
+### `asprintf`'s header documents an implementation that does not exist
+
+The comment above `asprintf` (lines 413–420) describes this:
+
+> It renders into the 4096-uint8 stack buffer first; if the output fits, it
+> allocates exactly (len+1) bytes and copies. If the format output exceeds 4095
+> bytes, the result is truncated (same as snprintf — a known limitation
+>
+> Returns a heap pointer (as int64) that the caller must free with mem_free().
+> … Returns 0 on allocation failure.
+
+The code does none of it. `asprintf0` measures, calls `libn_slab_alloc(len + 1)`,
+and renders into the allocation. **There is no stack buffer in any `asprintf`
+variant** — all nine `stack uint8[4096]` declarations in the file belong to
+`fprintf*` — and consequently **no truncation at 4095 bytes**. On allocation
+failure it `fail`s with `ENOMEM`; it does not return 0.
+
+Three disagreements, and the sentence describing the truncation is itself cut off
+mid-clause with an unclosed parenthesis.
+
+The dangerous direction is not the stale text but what a reader does with it. The
+comment describes a *worse* implementation than the one present, so someone
+trusting it either adds a workaround for a limitation that was already fixed, or
+"repairs" the code to match the documentation and reintroduces the truncation.
+And a caller following the documented `0` convention would test for a failure
+value the function never returns, while the real `ENOMEM` propagates past an
+unprepared call site.
+
+### `asprintf` becomes `format`, returning `string`
+
+The signature is the C convention Nitpick's type system exists to eliminate — a
+raw heap pointer returned as `int64`, the length passed back through an
+out-parameter, and a manual `mem_free` obligation on the caller:
+
+```nitpick
+pub func:asprintf0 = int64(int64:out_len, int64:fmt);   // before
+pub func:format    = string(fmt:f, ..*);                 // after
+```
+
+A `string` is `{ptr, len, cap}` and RAII-managed under D-003, so it carries its
+own length — `out_len` has nothing to report — and frees itself, so the leak that
+the current contract makes possible is not expressible. Under D-052 the size is
+known before emitting, so it allocates exactly once with no measuring render.
+
+The name changes because the contract does. `asprintf` means "allocating
+`sprintf` returning `char*`"; a function returning a managed `string` is not that
+function, and a familiar name promising C semantics while delivering different
+ones is worse than an unfamiliar one. This is the same call already made for
+`execl` and the syscall wrappers: `nlibc` keeps POSIX *behaviour* where it is
+right and drops POSIX *conventions* that the type system supersedes.
+
+`format` is the only member of this family that allocates. It is also the only
+one that should — the other three write to an existing sink.
+
+---
+
+## 7. What remains
 
 **Step 6 — `scanf`, last and most carefully.** A mismatched `printf` specifier
 reads through a bad pointer; a mismatched `scanf` specifier **writes** through
@@ -257,3 +332,5 @@ one. The compile-time check must verify that each argument is a pointer of the
 type the specifier writes, and that it is writable. Under lowering, each
 specifier emits a typed reader taking a typed pointer, so `%d` paired with a
 `string` is a compile error rather than a four-byte write into a string's header.
+
+27 functions — `scanf`, `fscanf`, `sscanf`, nine variants each — collapsing to 3.
