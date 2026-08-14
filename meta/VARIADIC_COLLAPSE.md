@@ -10,12 +10,13 @@ about to be deleted.
 
 | | Before | After |
 |---|---:|---:|
-| public functions | 608 | **468** |
+| public functions | 608 | **467** |
 | parameters | 1,710 | **~830** |
 
 *(143 variants collapse to 16; the 10 `sysN`/`sys_fullN` variants are deleted
-rather than collapsed, along with `sys_safe`, the 7-arg `sys_full`, and
-`err_from_syscall` — see D-047.)*
+rather than collapsed, along with `sys_safe`, the 7-arg `sys_full`,
+`err_from_syscall`, `libn_ioctl`, and `io_fcntl` — see D-047 and
+`SYSCALL_LAYER_REMOVAL.md`. One function, `io_isatty`, is added.)*
 
 ---
 
@@ -54,12 +55,12 @@ pub func:execlp = NIL(wild int8->:name, ..*wild int8->[]:args);
 // syscall builtin — `sys` — returning Result<int64> directly. err_from_syscall
 // goes with them. Callers use the builtin.
 //
-// Before deleting: check `sys_safe`'s per-argument constraints against libn's
-// typed io_* wrappers (io_set_cloexec, io_set_nonblocking, io_set_append,
-// io_fcntl_setown). sys_safe admits SYS_IOCTL only for three specific request
-// codes; confirm the typed API leaves no way to pass an arbitrary one. The
-// syscall LIST itself is not needed — D-048 collapsed the tiers, and restricting
-// which syscalls a binary may make is --seccomp's job.
+// The sys_safe precondition is DISCHARGED — see SYSCALL_LAYER_REMOVAL.md.
+// Its ioctl/fcntl argument checks guard nothing: the two wrappers that could
+// pass an arbitrary code (libn_ioctl, io_fcntl) have zero callers, only TCGETS
+// is ever requested, and the fcntl whitelist silently breaks io_fcntl_add_seals
+// and io_fcntl_get_seals — both return EINVAL unconditionally today. Those two
+// wrappers are DELETED alongside, and io_isatty replaces the raw TCGETS.
 ```
 
 Notes:
@@ -132,10 +133,11 @@ inhabited only by literals. Code needing dynamic output composes it with
 
 ## Order of work
 
-1. **`sys` / `sys_full`** — **deleted, not collapsed** (D-047, D-048). Check
-   `sys_safe`'s `ioctl` argument constraints against the typed `io_*` wrappers
-   first, then remove all 10 variants plus `sys_safe`, the 7-arg `sys_full`, and
-   `err_from_syscall`, and rewrite call sites to the single `sys` builtin.
+1. **`sys` / `sys_full`** — **deleted, not collapsed** (D-047, D-048), together
+   with `libn_ioctl` and `io_fcntl`: **16 functions**, per
+   `SYSCALL_LAYER_REMOVAL.md`. Remove all 10 arity variants plus `sys_safe`, the
+   7-arg `sys_full`, and `err_from_syscall`; add `io_isatty`; rewrite call sites
+   to the single `sys` builtin.
 2. **`execl` / `execlp`** — 17 to 2, no dependants inside `libn`.
 3. **`str_snprintf`, `strbuf_appendf`** — the string layer, needed by the io
    families.
