@@ -1,7 +1,7 @@
 # Variadic Collapse
 
 The first porting action, per `PORT_PLAN.md`. **153 hand-expanded functions
-become 18.**
+become 16 — and 13 more are deleted outright.**
 
 Every subsequent pass — the D-012 pointer classification, the D-042 identifier
 types, the D-021 cast rewrites — then runs over roughly half the surface. Doing
@@ -10,15 +10,19 @@ about to be deleted.
 
 | | Before | After |
 |---|---:|---:|
-| public functions | 608 | **473** |
-| parameters | 1,710 | **852** |
+| public functions | 608 | **468** |
+| parameters | 1,710 | **~830** |
+
+*(143 variants collapse to 16; the 10 `sysN`/`sys_fullN` variants are deleted
+rather than collapsed, along with `sys_safe`, the 7-arg `sys_full`, and
+`err_from_syscall` — see D-047.)*
 
 ---
 
 ## Two mechanisms
 
 **Homogeneous** families take the `..*` rest marker over a typed slice
-(`FORMAL_DRAFT` 06 §6.1.3). 27 functions collapse to 4.
+(`FORMAL_DRAFT` 06 §6.1.3). 17 functions collapse to 2; a further 10 are deleted.
 
 **Format-directed** families take a `fmt` parameter — inhabited only by
 compile-time string literals — and the compiler checks each specifier against the
@@ -31,7 +35,7 @@ hazard across intact.
 
 ---
 
-## Homogeneous — 27 → 4
+## Homogeneous — 17 → 2, plus 10 deleted
 
 Signatures below are shown **after** the D-012 and D-042 passes, so the intended
 end state is visible in one place. The collapse itself only changes the arity.
@@ -64,8 +68,9 @@ Notes:
 - The C convention of a trailing `NULL` sentinel **disappears**: a slice carries
   its own length. That removes a real failure mode — a forgotten terminator in
   C reads past the end of the argument list.
-- `sys` / `sys_full` keep `int64` returns as COUNT — the syscall result is a
-  genuine value, with failure moving to `Result.error`.
+- The **language builtins** `sys` and `sys_full` keep `int64` returns as COUNT —
+  the syscall result is a genuine value, with failure in `Result.error`. It is
+  `libn`'s *wrappers* around them that disappear, not the builtins.
 
 ---
 
