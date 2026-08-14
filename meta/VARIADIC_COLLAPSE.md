@@ -1,29 +1,41 @@
 # Variadic Collapse
 
-The first porting action, per `PORT_PLAN.md`. **153 hand-expanded functions
-become 16 — and 13 more are deleted outright.**
+The first porting action, per `PORT_PLAN.md`. Of the 153 hand-expanded
+functions, **126 collapse to 14 — and the other 27 are deleted outright**, along
+with 5 more that the two investigations turned up.
 
 Every subsequent pass — the D-012 pointer classification, the D-042 identifier
 types, the D-021 cast rewrites — then runs over roughly half the surface. Doing
-this after those passes would mean carefully rewriting 858 parameters that are
+this after those passes would mean carefully rewriting ~885 parameters that are
 about to be deleted.
 
 | | Before | After |
 |---|---:|---:|
-| public functions | 608 | **467** |
-| parameters | 1,710 | **~830** |
+| public functions | 608 | **465** |
+| parameters | 1,710 | **~825** |
 
-*(143 variants collapse to 16; the 10 `sysN`/`sys_fullN` variants are deleted
-rather than collapsed, along with `sys_safe`, the 7-arg `sys_full`,
-`err_from_syscall`, `libn_ioctl`, and `io_fcntl` — see D-047 and
-`SYSCALL_LAYER_REMOVAL.md`. One function, `io_isatty`, is added.)*
+Where the 143 goes:
+
+| Family | Count | Outcome | Why |
+|---|---:|---|---|
+| `printf` / `scanf` families | 126 | **→ 14** | format-directed `fmt` (D-045) |
+| `sysN` / `sys_fullN` | 10 | **→ 0** | the `sys` builtin replaces them (D-047, D-048) |
+| `execlN` / `execlpN` | 17 | **→ 0** | array literals make them redundant |
+
+Deleted alongside, and not part of the 153: `sys_safe`, the 7-arg `sys_full`,
+`err_from_syscall`, `libn_ioctl`, `io_fcntl`. Added: `io_isatty`. See
+`SYSCALL_LAYER_REMOVAL.md` and `EXEC_FAMILY.md`.
 
 ---
 
 ## Two mechanisms
 
 **Homogeneous** families take the `..*` rest marker over a typed slice
-(`FORMAL_DRAFT` 06 §6.1.3). 17 functions collapse to 2; a further 10 are deleted.
+(`FORMAL_DRAFT` 06 §6.1.3). In the event **none of them survive as variadics** —
+all 27 are deleted, the syscall wrappers because the `sys` builtin replaces them
+and the exec wrappers because array literals make them redundant. The mechanism
+still matters for the library's own future signatures; it just has no callers
+among the families this collapse touches.
 
 **Format-directed** families take a `fmt` parameter — inhabited only by
 compile-time string literals — and the compiler checks each specifier against the
@@ -36,17 +48,22 @@ hazard across intact.
 
 ---
 
-## Homogeneous — 17 → 2, plus 10 deleted
+## Homogeneous — 27 → 0
 
 Signatures below are shown **after** the D-012 and D-042 passes, so the intended
 end state is visible in one place. The collapse itself only changes the arity.
 
 ```nitpick
-// proc/exec.npk        execl0 … execl8   (9)  ->  1
-pub func:execl  = NIL(wild int8->:path, ..*wild int8->[]:args);
-
-// proc/exec.npk        execlp1 … execlp8 (8)  ->  1
-pub func:execlp = NIL(wild int8->:name, ..*wild int8->[]:args);
+// proc/exec.npk   execl0 … execl8, execlp1 … execlp8  (17)  ->  ZERO
+//
+// These do NOT collapse either — they are DELETED. See EXEC_FAMILY.md.
+// Nitpick has array literals, and `..*` lowers to the same slice execv already
+// takes, so a collapsed execl would be a second spelling of execv — and the
+// weaker one, since a variadic list cannot be computed at runtime.
+//
+// execv/execvp/execve/execvpe survive with argv[0] promoted to a mandatory
+// parameter, which makes argc == 0 unrepresentable. execl0 built argv = {NULL}
+// and handed callers the CVE-2021-4034 (PwnKit) primitive as a convenience.
 
 // syscall/syscall.npk  sys1 … sys5, sys_full1 … sys_full5  (10)  ->  ZERO
 //
@@ -138,7 +155,10 @@ inhabited only by literals. Code needing dynamic output composes it with
    `SYSCALL_LAYER_REMOVAL.md`. Remove all 10 arity variants plus `sys_safe`, the
    7-arg `sys_full`, and `err_from_syscall`; add `io_isatty`; rewrite call sites
    to the single `sys` builtin.
-2. **`execl` / `execlp`** — 17 to 2, no dependants inside `libn`.
+2. **`execl` / `execlp`** — **17 to 0**, per `EXEC_FAMILY.md`; no dependants
+   inside `libn`. Re-sign `execv`/`execvp`/`execve`/`execvpe` with a mandatory
+   `argv0` parameter, drop the 17 names from `src/all.npk:36`, and fix the stale
+   `execlp1` example at `src/proc/wait.npk:21`.
 3. **`str_snprintf`, `strbuf_appendf`** — the string layer, needed by the io
    families.
 4. **`io_*printf`** — the unbuffered io family.
