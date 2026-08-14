@@ -49,15 +49,17 @@ pub func:execlp = NIL(wild int8->:name, ..*wild int8->[]:args);
 
 // syscall/syscall.npk  sys1 … sys5, sys_full1 … sys_full5  (10)  ->  ZERO
 //
-// These do NOT collapse — they are DELETED (D-047). libn's wrappers are built on
-// sys!!!, the raw tier D-001 removed, and the language builtins `sys` and
-// `sys_full` now return Result<int64> directly. err_from_syscall goes with them.
-// Callers use the builtins.
+// These do NOT collapse — they are DELETED (D-047, D-048). libn's wrappers are
+// built on sys!!!, the raw tier D-001 removed, and there is now exactly one
+// syscall builtin — `sys` — returning Result<int64> directly. err_from_syscall
+// goes with them. Callers use the builtin.
 //
-// Before deleting: libn's `sys_safe` holds the curated whitelist that
-// BUILTIN_REFERENCE §3 leaves unspecified, including per-argument filtering
-// (SYS_IOCTL is admitted only for three specific request codes). That policy is
-// extracted into the builtin's specification first.
+// Before deleting: check `sys_safe`'s per-argument constraints against libn's
+// typed io_* wrappers (io_set_cloexec, io_set_nonblocking, io_set_append,
+// io_fcntl_setown). sys_safe admits SYS_IOCTL only for three specific request
+// codes; confirm the typed API leaves no way to pass an arbitrary one. The
+// syscall LIST itself is not needed — D-048 collapsed the tiers, and restricting
+// which syscalls a binary may make is --seccomp's job.
 ```
 
 Notes:
@@ -130,9 +132,10 @@ inhabited only by literals. Code needing dynamic output composes it with
 
 ## Order of work
 
-1. **`sys` / `sys_full`** — **deleted, not collapsed** (D-047). Extract the
-   `sys_safe` whitelist policy into the builtin's specification first, then remove
-   all 10 wrappers plus `err_from_syscall` and rewrite call sites to the builtins.
+1. **`sys` / `sys_full`** — **deleted, not collapsed** (D-047, D-048). Check
+   `sys_safe`'s `ioctl` argument constraints against the typed `io_*` wrappers
+   first, then remove all 10 variants plus `sys_safe`, the 7-arg `sys_full`, and
+   `err_from_syscall`, and rewrite call sites to the single `sys` builtin.
 2. **`execl` / `execlp`** — 17 to 2, no dependants inside `libn`.
 3. **`str_snprintf`, `strbuf_appendf`** — the string layer, needed by the io
    families.
