@@ -1,5 +1,20 @@
 # The format layer
 
+> **Outcome: the format layer is deleted, not collapsed (D-053).**
+>
+> This document is the audit that produced that decision, and the findings below
+> are the evidence for it — so it is kept intact rather than rewritten. What
+> changed: the twelve functions this collapse was converging on are themselves
+> removed. `printf`, `scanf`, and every relative leave `nlibc`; output is
+> `io_print` / `io_println` / `io_write_str` / `fputs`, each taking one `string`,
+> and formatting happens beforehand as ordinary functions returning `string`,
+> spliced by `&{ }` interpolation.
+>
+> The reasoning is in D-053 and is short: every defect catalogued here is a
+> format string's fused type/width/bound/count assertion disagreeing with the
+> arguments. Separating what to print from how to print it leaves nothing to
+> disagree. See §9.
+
 Step 3 of `VARIADIC_COLLAPSE.md` — the string layer the io families depend on.
 `str_snprintf0`…`str_snprintf8` and `strbuf_appendf0`…`strbuf_appendf8`, 18
 functions, collapse to 2.
@@ -324,13 +339,194 @@ one that should — the other three write to an existing sink.
 
 ---
 
-## 7. What remains
+## 7. Step 6 — `scanf`: 27 → 3, and why this step mattered most
 
-**Step 6 — `scanf`, last and most carefully.** A mismatched `printf` specifier
-reads through a bad pointer; a mismatched `scanf` specifier **writes** through
-one. The compile-time check must verify that each argument is a pointer of the
-type the specifier writes, and that it is writable. Under lowering, each
-specifier emits a typed reader taking a typed pointer, so `%d` paired with a
-`string` is a compile error rather than a four-byte write into a string's header.
+`io/bio/fscanf.npk` — `fscanf`, `sscanf`, `scanf`, nine variants each — collapses
+to 3 as planned. The count is unremarkable; the engine is not.
 
-27 functions — `scanf`, `fscanf`, `sscanf`, nine variants each — collapsing to 3.
+### What `libn` got right
+
+`bio_scan_str` **traps** when `%s` is used without a width:
+
+```nitpick
+if (width <= 0i64 && buf != 0i64) {
+    !!! 22i32; // EINVAL: strictly require width bounds on string parsing to prevent buffer overflow
+}
+```
+
+That closes C's most notorious hole — `scanf("%s", buf)`, an unbounded write into
+a caller buffer — and closes it with a trap rather than a recoverable error,
+correctly treating it as a programming defect rather than a runtime condition.
+Three more things are right: the store is guarded against a null destination
+(line 209), running out of arguments stops cleanly rather than reading past the
+vector (line 358), and a malformed format string cannot advance the parser past
+its NUL (line 339).
+
+### Defect 1 — every integer store is 8 bytes, whatever the destination is
+
+Length modifiers are parsed and then thrown away. The comment says so:
+
+```nitpick
+// Skip length modifiers (l, h, hh, ll, z, j, t) — all use int64 anyway
+```
+
+and every integer conversion ends at the same store:
+
+```nitpick
+(cast_unchecked<int64->>(out))[0] = value;
+```
+
+So `%hhd`, `%hd`, `%d`, and `%ld` all write **8 bytes**. In C, `%d` means `int` —
+32 bits. A caller doing the C-correct thing:
+
+```nitpick
+int32:n;
+sscanf1(str, "%d", cast_unchecked<int64>(@n));   // writes 8 bytes into 4
+```
+
+overflows the destination by four bytes. `%hhd` into an `int8` overflows by
+seven. This is not misuse — it is the conventionally correct spelling, and the
+engine cannot detect it because the parameter type is `int64` and the modifier it
+would need was discarded three lines earlier.
+
+"All use int64 anyway" is an assumption about the caller that the signature gives
+the caller no way to honour or violate visibly.
+
+### Defect 2 — the `%s` width is buffer-size-minus-one
+
+`bio_scan_str` fills to `max = width` and then writes the terminator past it:
+
+```nitpick
+while (count < max) { … buf[count] = c; count = count + 1i64; }
+if (buf != 0i64) { buf[count] = 0u8; }        // count may equal width
+```
+
+`width + 1` bytes total. That is correct C semantics — `%Ns` means N characters
+*plus* a NUL — but it means the number in the format string is the buffer size
+**minus one**, and `char8[32]` paired with `%32s` overflows by exactly one byte.
+`libn` closed the unbounded case and inherited the off-by-one-prone convention
+whole.
+
+### Defect 3 — `%n` exists here
+
+`bio_scan_engine` implements `%n` (line 366), storing the consumed count through
+a caller pointer. D-052 prohibits `%n`; that prohibition covers this one too, and
+the replacement is the same argument: the consumed count should be a **return
+value or a typed accessor**, not a pseudo-conversion that writes through a
+pointer. `%n` exists in C because there is no other way to get the number out.
+Under lowering there is.
+
+### Why lowering is worth more here than anywhere else
+
+Every defect above is a **write** through a caller pointer, and every one of them
+becomes a compile error under D-052 — not because the check is stricter, but
+because the information arrives intact:
+
+| Defect | Under lowering |
+|---|---|
+| 8-byte store into a 4-byte destination | the reader is `scan_i32` **because the destination is `int32->`**; the store width comes from the type, and `%d` against an `int8->` is a compile error |
+| `%32s` into a `char8[32]` | the bound comes from **the destination's own length**, not a number transcribed into a string; the width specifier becomes redundant, and must agree if written |
+| `%n` writing through a pointer | deleted; the count is returned |
+
+The general shape: **C's format string carries a description of the arguments,
+and the arguments carry no description of themselves.** Every scanf defect above
+is that description being wrong, absent, or discarded. Lowering deletes the
+description and reads the arguments directly, so there is nothing left to
+disagree.
+
+For `printf` that turns an arbitrary *read* into a compile error. For `scanf` it
+turns three classes of arbitrary *write* into compile errors, which is why this
+step was ordered last and given the most care.
+
+---
+
+## 8. The collapse, as measured
+
+| Step | Family | Before | After collapse |
+|---|---|---:|---:|
+| 1 | syscall wrappers | 15 | 1 (`io_isatty` added) |
+| 2 | `execl` / `execlp` | 17 | 0 |
+| 3 | `str_snprintf`, `strbuf_appendf`, engine | 19 | 2 |
+| 4 | `io_*printf` | 45 | 3 |
+| 5 | buffered `printf` / `format` | 36 | 4 |
+| 6 | `scanf` | 27 | 3 |
+
+**608 → 462 public functions** at the end of the six steps, ~1,710 → ~825
+parameters.
+
+Four families turned out to be deletions rather than collapses — the syscall
+wrappers, `execl`, `io_dprintf`, and `io_sprintf` — and the audits found an
+exported `argc == 0` primitive, an arbitrary-read primitive behind `%s`, an
+`ENOMEM` path in `printf`, a header documenting a truncation that does not exist,
+and an 8-byte store into whatever the caller supplied.
+
+None of those were the point of the exercise. They were found because collapsing
+a family requires reading all nine variants of it.
+
+---
+
+## 9. D-053: the twelve survivors go too
+
+Reading all six steps together made the pattern visible. Every defect above is
+the same defect:
+
+| Defect | The assertion that disagreed |
+|---|---|
+| `%s` against an integer → arbitrary read | type |
+| length modifiers discarded → 8 bytes into 4 | width |
+| `%32s` into a `char8[32]` → one-byte overflow | bound |
+| more specifiers than arguments | count |
+
+A format string fuses the output text, the layout, and a set of assertions about
+arguments that sit elsewhere in the call. All four rows are that fusion coming
+apart. Compile-time lowering (D-052) catches each one — but only by re-deriving
+from the arguments what the format string already claimed, which raises the
+question of why the claim is there at all.
+
+**D-053 removes it.** Formatting becomes ordinary functions returning `string`,
+and interpolation splices the result:
+
+```nitpick
+println(`Total: &{x.prec(2).pad_left(8)}`);
+```
+
+### What this deletes from `nlibc`
+
+The twelve functions the six steps converged on:
+
+| Module | Removed |
+|---|---|
+| `str/strfmt.npk` | `str_snprintf` |
+| `str/strbuf.npk` | `strbuf_appendf` (the rest of `StrBuf` stays) |
+| `io/printf.npk` | `io_printf`, `io_fprintf`, `io_eprintf` |
+| `io/bio/fprintf.npk` | `printf`, `fprintf`, `eprintf`, `format` |
+| `io/bio/fscanf.npk` | `scanf`, `fscanf`, `sscanf` |
+
+**Nothing is added.** The string-taking output API already exists and is already
+counted: `io_print`, `io_println`, `io_write_str`, `io_write_strln`
+(`io/write.npk`) and `fputs` (`io/bio/fstr.npk`).
+
+`scanf` needs no replacement invented either — `str/strconv.npk` already holds
+typed parse functions, which is what `sscanf` was approximating badly.
+
+**462 → 450.**
+
+### Where the formatting vocabulary lives
+
+Not in `nlibc`. By D-051's layering, `nlibc` is the POSIX syscall surface;
+`prec`, `pad_left`, `pad_right`, `hex`, and their siblings are portable code and
+belong in the **stdlib above it**.
+
+The prototype already wrote them. `nitpick/stdlib/fmt.npk` has `fmt_int`,
+`fmt_bool`, `fmt_hex`, `fmt_float(x, decimals)`, `fmt_pad_left`, `fmt_pad_right`,
+and `fmt_repeat` — each taking a typed value and returning a `string` — and its
+header records **no extern calls, only compiler builtins**. It ports cleanly.
+
+Its `fmt` / `fmt2` / `fmt3` / `fmt4` placeholder helpers do **not** come across:
+they are a template mini-language, arity-expanded, and interpolation replaces
+them exactly.
+
+For composition too complex to read inline, the answer is a builder rather than a
+richer format string. `StrBuf` is C-free and stays. The prototype's
+`stdlib/string_builder.npk` is superseded — it depends on an
+`extern "nitpick_libc_string"` block of three C functions.

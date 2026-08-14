@@ -11,8 +11,14 @@ about to be deleted.
 
 | | Before | After |
 |---|---:|---:|
-| public functions | 608 | **462** |
+| public functions | 608 | **450** |
 | parameters | 1,710 | **~825** |
+
+**Then D-053 deletes the format layer outright** — the 14 format-directed
+targets below become 2 (`str_snprintf` and `strbuf_appendf` go with the rest;
+only non-format members of their modules remain). Formatting moves to functions
+returning `string`, spliced by `&{ }` interpolation, and the string-taking output
+API already exists. See `FORMAT_LOWERING.md` §9. **462 → 450.**
 
 Where the 143 goes:
 
@@ -177,8 +183,13 @@ inhabited only by literals. Code needing dynamic output composes it with
    **`format(fmt:f, ..*) -> string`**: its header documents a truncating
    implementation that does not exist, and its raw-pointer-plus-out-param
    contract is what `string` supersedes.
-6. **`scanf` / `fscanf` / `sscanf`** — last, and the most careful: the pointer
-   checking in step 4 of the previous section is where the safety is won.
+6. **`scanf` / `fscanf` / `sscanf`** — last, and the most careful; 27 → 3, per
+   `FORMAT_LOWERING.md` §7. `libn` correctly traps on `%s` without a width, but
+   discards length modifiers and stores **8 bytes for every integer conversion**,
+   so the C-correct `%d` into an `int32` overflows by four. Lowering takes the
+   store width from the destination's type and the string bound from the
+   destination's length, turning three classes of arbitrary write into compile
+   errors.
 
 Steps 4–6 depend on the compiler implementing `fmt` checking, so the signatures
 can be written now while the bodies wait on the frontend.
