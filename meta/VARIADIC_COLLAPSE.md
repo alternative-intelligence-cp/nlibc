@@ -11,7 +11,7 @@ about to be deleted.
 
 | | Before | After |
 |---|---:|---:|
-| public functions | 608 | **465** |
+| public functions | 608 | **464** |
 | parameters | 1,710 | **~825** |
 
 Where the 143 goes:
@@ -23,8 +23,8 @@ Where the 143 goes:
 | `execlN` / `execlpN` | 17 | **→ 0** | array literals make them redundant |
 
 Deleted alongside, and not part of the 153: `sys_safe`, the 7-arg `sys_full`,
-`err_from_syscall`, `libn_ioctl`, `io_fcntl`. Added: `io_isatty`. See
-`SYSCALL_LAYER_REMOVAL.md` and `EXEC_FAMILY.md`.
+`err_from_syscall`, `libn_ioctl`, `io_fcntl`, `str_format_args`. Added: `io_isatty`. See
+`SYSCALL_LAYER_REMOVAL.md`, `EXEC_FAMILY.md`, and `FORMAT_LOWERING.md`.
 
 ---
 
@@ -160,7 +160,11 @@ inhabited only by literals. Code needing dynamic output composes it with
    `argv0` parameter, drop the 17 names from `src/all.npk:36`, and fix the stale
    `execlp1` example at `src/proc/wait.npk:21`.
 3. **`str_snprintf`, `strbuf_appendf`** — the string layer, needed by the io
-   families.
+   families; 18 → 2, per `FORMAT_LOWERING.md`. Also deletes `str_format_args`,
+   the erased engine, which must not survive as an untyped bypass beside the
+   `fmt`-checked wrappers. That document settles the implementation for steps
+   4–6 too: the compiler **lowers** the format string to straight-line typed
+   emitters rather than merely checking it, so no runtime format parser exists.
 4. **`io_*printf`** — the unbuffered io family.
 5. **`printf` / `fprintf` / `eprintf` / `asprintf`** — the buffered layer.
 6. **`scanf` / `fscanf` / `sscanf`** — last, and the most careful: the pointer
